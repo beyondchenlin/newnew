@@ -5,9 +5,9 @@ import os
 import tempfile
 import logging
 from datetime import datetime
-from video_synthesis.config.settings import VIDEO_SETTINGS, PATH_SETTINGS
+from video_synthesis.config.settings import VIDEO_SETTINGS, PATH_SETTINGS, SUBTITLE_BACKGROUND
 from video_synthesis.utils.ffmpeg_utils import get_video_duration, get_video_dimensions, run_ffmpeg_command
-from video_synthesis.core.text_processor import create_text_overlay
+from video_synthesis.core.text_processor import create_text_overlay, create_subtitle_background
 from video_synthesis.core.video_processor import get_output_filename
 from rich import console
 
@@ -110,10 +110,18 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: CN,微软雅黑,70,&H00000000,&H000000FF,&H0000FFFF,&H0000FFFF,1,0,0,0,100,100,0,0,3,2,0,2,30,30,160,1
-Style: EN,微软雅黑,50,&H0000FF00,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,8,30,30,160,1
-Style: CN_Hidden,微软雅黑,70,&HFF000000,&H000000FF,&HFF00FFFF,&HFF00FFFF,1,0,0,0,100,100,0,0,3,2,0,2,30,30,160,1
-Style: EN_Hidden,微软雅黑,50,&HFF00FF00,&H000000FF,&HFF000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,8,30,30,160,1
+
+# 中文字幕样式：白色文字，无背景，无边框，底部居中对齐
+Style: CN,微软雅黑,70,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,3,0,0,2,30,30,220,1
+
+# 英文字幕样式：黑色文字，黄色背景，居中对齐
+Style: EN,微软雅黑,50,&H00000000,&H000000FF,&H0000FFFF,&H0000FFFF,1,0,0,0,100,100,0,0,3,4,0,5,150,150,37,1
+
+# 中文字幕隐藏样式（用于6秒内）：透明文字和背景
+Style: CN_Hidden,微软雅黑,70,&HFFFFFFFF,&H000000FF,&HFF000000,&HFF000000,1,0,0,0,100,100,0,0,3,0,0,2,30,30,220,1
+
+# 英文字幕隐藏样式（用于6秒内）：透明文字和背景
+Style: EN_Hidden,微软雅黑,50,&HFF000000,&H000000FF,&HFF000000,&HFF000000,1,0,0,0,100,100,0,0,3,0,0,8,150,150,37,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -166,10 +174,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             logger.info("\n=== ASS文件头部写入成功 ===")
             logger.info(f"目标分辨率: 720x1280")
             logger.info("样式设置:")
-            logger.info("CN: 黑色文字(不透明) + 黄色背景(不透明)")
-            logger.info("EN: 黄色文字(不透明) + 黑色背景")
-            logger.info("CN_Hidden: 黑色文字(透明) + 黄色背景(透明)")
-            logger.info("EN_Hidden: 黄色文字(透明) + 黑色背景")
+            logger.info("CN: 白色文字(不透明) + 无背景")
+            logger.info("EN: 黑色文字(不透明) + 黄色背景")
+            logger.info("CN_Hidden: 白色文字(透明) + 无背景")
+            logger.info("EN_Hidden: 黄色文字(透明) + 无背景")
+            
+            def write_subtitle_line(start_time, end_time, text, is_english=False):
+                """写入字幕行，为英文添加固定大小的背景色块和居中对齐"""
+                if is_english:
+                    # 为英文添加固定大小的背景色块和居中对齐
+                    x_pos = 360  # 720/2，视频宽度的一半
+                    y_pos = 120  # 距离顶部的距离
+                    
+                    # 创建一个固定大小的背景色块
+                    # \p1 开始绘制矩形
+                    # \bord0 无边框
+                    # \shad0 无阴影
+                    # \c&H000000& 文字颜色（黑色）
+                    # \3c&H00FFFF& 背景颜色（黄色）：00=蓝色, FF=绿色, FF=红色
+                    # \4a&H00& 背景不透明度（完全不透明）
+                    bg_width = 600  # 背景宽度
+                    bg_height = 80  # 背景高度
+                    bg_x = x_pos - bg_width/2  # 背景左上角x坐标
+                    bg_y = y_pos - bg_height/2  # 背景左上角y坐标
+                    
+                    # 先绘制背景
+                    text = f"{{\\an5\\pos({x_pos},{y_pos})\\p1\\bord0\\shad0\\c&H000000&\\3c&H00FFFF&\\4a&H00&}}m {-bg_width/2} {-bg_height/2} l {bg_width/2} {-bg_height/2} {bg_width/2} {bg_height/2} {-bg_width/2} {bg_height/2}{{\\p0}}" + \
+                           f"{{\\an5\\pos({x_pos},{y_pos})\\fscx100\\fscy100}}{text}"
+                    
+                    f.write(f"Dialogue: 0,{start_time},{end_time},EN,,0,0,0,,{text}\n")
+                else:
+                    # 中文字幕保持原样
+                    f.write(f"Dialogue: 0,{start_time},{end_time},CN,,30,30,160,,{text}\n")
             
             # 写入字幕内容
             written_lines = 0
@@ -215,8 +251,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         if end_seconds > 6:
                             logger.info(f"字幕跨越6秒时间点，添加正常样式部分 (6秒-{end_time})")
                             logger.info(f"应用样式: CN (不透明)")
-                            f.write(f"Dialogue: 0,0:00:06.00,{end_time},CN,,30,30,160,,{zh_text}\n")
-                            f.write(f"Dialogue: 0,0:00:06.00,{end_time},EN,,30,30,160,,{en_text}\n")
+                            write_subtitle_line("0:00:06.00", end_time, zh_text, False)
+                            write_subtitle_line("0:00:06.00", end_time, en_text, True)
                             cross_six_lines += 2
                     else:
                         logger.info(f"\n字幕块 {i+1}:")
@@ -226,9 +262,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         logger.info("使用正常样式 (>6秒)")
                         logger.info(f"应用样式: CN (不透明)")
                         
-                        # 6秒后的字幕直接使用普通样式
-                        f.write(f"Dialogue: 0,{start_time},{end_time},CN,,30,30,160,,{zh_text}\n")
-                        f.write(f"Dialogue: 0,{start_time},{end_time},EN,,30,30,160,,{en_text}\n")
+                        # 6秒后的字幕使用普通样式
+                        write_subtitle_line(start_time, end_time, zh_text, False)
+                        write_subtitle_line(start_time, end_time, en_text, True)
                         normal_lines += 2
                     
                     written_lines += 2
@@ -393,14 +429,20 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
     else:
         logger.info("字幕添加功能已禁用")
     
-    # 创建文字叠加图片
+    # 创建文字叠加图片和字幕背景
     text_overlay = create_text_overlay(title1, title2, bottom_text, width, height)
+    # subtitle_bg = create_subtitle_background()  # 暂时注释掉字幕背景创建
     
     # 构建视频合并的filter_complex命令
-    inputs = [background_video, main_video] + side_videos
+    # inputs = [background_video, main_video] + side_videos + [text_overlay, subtitle_bg]  # 原始代码
+    inputs = [background_video, main_video] + side_videos + [text_overlay]  # 移除字幕背景
     input_args = []
     for input_file in inputs:
         input_args.extend(['-i', input_file])
+    
+    # 添加文字叠加图片和字幕背景图片
+    # input_args.extend(['-i', text_overlay, '-i', subtitle_bg])  # 原始代码
+    input_args.extend(['-i', text_overlay])  # 只添加文字叠加图片
     
     filter_complex = []
     # 设置背景视频
@@ -432,13 +474,18 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
         last_bg = next_bg
         current_time += video_durations[i]
     
-    # 添加文字叠加图片
-    input_args.extend(['-i', text_overlay])
+    # 添加文字叠加和字幕背景
     next_bg = f'{last_bg}_text'
     filter_complex.append(f'[{last_bg}][{len(inputs)}:v]overlay=0:0:enable=\'between(t,0,6)\'[{next_bg}]')
     last_bg = next_bg
     
-    # 添加字幕（如果启用并且存在）
+    # 注释掉字幕背景相关代码
+    # next_bg = f'{last_bg}_subtitle_bg'
+    # x_pos = '(W-w)/2' if SUBTITLE_BACKGROUND['POSITION_X'] == 'center' else str(SUBTITLE_BACKGROUND['POSITION_X'])
+    # filter_complex.append(f'[{last_bg}][{len(inputs)+1}:v]overlay=x={x_pos}:y={SUBTITLE_BACKGROUND["POSITION_Y"]}:enable=\'gte(t,{SUBTITLE_BACKGROUND["SHOW_TIME"]})\'[{next_bg}]')
+    # last_bg = next_bg
+    
+    # 添加字幕
     if add_subtitles and merged_ass and os.path.exists(merged_ass):
         merged_ass = merged_ass.replace("\\", "/")
         filter_complex.append(f'[{last_bg}]ass={merged_ass}[final]')
