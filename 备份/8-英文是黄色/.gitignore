@@ -1,0 +1,58 @@
+# 首先忽略所有文件
+*
+
+# 不忽略主要目录结构
+!*/
+
+# 不忽略这些特定文件和目录
+!.gitignore
+!.cursorrules
+!README.md
+!requirements.txt
+!run.py
+!setup.py
+!design.md
+!video_synthesis/
+!video_synthesis/**/*.py
+
+# 在每个目录放置.gitkeep以保持目录结构
+!**/.gitkeep
+
+# 忽略以下特定内容
+**/__pycache__/
+*.pyc
+*.egg-info/
+*.egg-info/*
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.mp3
+*.wav
+*.log
+*.tmp
+*.temp
+*.swp
+.DS_Store
+.env
+.idea/
+.vscode/
+dist/
+build/
+output/
+
+# 明确忽略这些目录中的具体内容，但保留目录结构
+assets/**/*
+!assets/**/
+备份/**/*
+!备份/**/
+fonts/**/*
+!fonts/**/
+logs/**/*
+!logs/**/
+outputs/**/*
+!outputs/**/
+subtitles/**/*
+!subtitles/**/
+
