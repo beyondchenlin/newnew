@@ -3,12 +3,39 @@
 """
 import os
 import random
+import logging
+from datetime import datetime
 from video_synthesis.utils.ffmpeg_utils import run_ffmpeg_command, get_video_duration, get_video_dimensions
 from video_synthesis.config.settings import VIDEO_SETTINGS
 import glob
 import time
 from ..utils.file_utils import load_history, save_history
 from rich.console import Console
+
+# 配置日志记录
+def setup_logging():
+    """设置日志记录"""
+    # 创建logs目录（如果不存在）
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+    
+    # 生成日志文件名（使用时间戳）
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file = f'logs/tv_overlay_{timestamp}.log'
+    
+    # 配置日志记录器
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler()  # 同时输出到控制台
+        ]
+    )
+    return logging.getLogger()
+
+# 创建日志记录器
+logger = setup_logging()
 
 def sanitize_filename(text):
     """处理文件名，移除非法字符
@@ -441,6 +468,93 @@ def process_pip2_videos(main_video_path, pip2_folder):
     # 生成视频序列
     return generate_pip2_sequence(pip2_folder, target_duration)
 
+def add_tv_overlay(input_video, output_video):
+    """在视频最后添加TV图片叠加
+    Args:
+        input_video (str): 输入视频路径
+        output_video (str): 输出视频路径
+    """
+    # 使用绝对路径
+    tv_image = os.path.abspath("assets/tv.png")
+    logger.info("=== TV图片叠加处理开始 ===")
+    logger.info(f"检查TV图片路径: {tv_image}")
+    
+    if os.path.exists(tv_image):
+        logger.info(f"TV图片文件存在")
+        logger.info(f"输入视频: {input_video}")
+        logger.info(f"输出视频: {output_video}")
+        
+        try:
+            # 获取TV图片信息
+            import cv2
+            img = cv2.imread(tv_image, cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                logger.info(f"TV图片尺寸: {img.shape[1]}x{img.shape[0]}")
+                logger.info(f"TV图片通道数: {img.shape[2] if len(img.shape) > 2 else 1}")
+            else:
+                logger.warning("无法读取TV图片信息")
+        except Exception as e:
+            logger.error(f"读取TV图片信息时出错: {str(e)}")
+        
+        # 构建滤镜命令
+        filter_complex = [
+            '[0:v]format=rgba[video]',
+            # 使用scale2ref确保准确的50%缩放
+            '[1:v]scale=iw/2:-1[tv]',  # 保持宽高比的50%缩放
+            '[video][tv]overlay=0:-300'
+        ]
+        
+        filter_str = ';'.join(filter_complex)
+        logger.info(f"滤镜命令: {filter_str}")
+        
+        # 转义路径中的特殊字符
+        tv_image_escaped = tv_image.replace('\\', '/').replace(':', r'\:')
+        
+        cmd = [
+            'ffmpeg', '-i', input_video,
+            '-i', tv_image_escaped,
+            '-filter_complex', filter_str,
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-c:a', 'copy',
+            '-y',
+            output_video
+        ]
+        logger.info("ffmpeg命令:")
+        logger.info(' '.join(cmd))
+        
+        try:
+            run_ffmpeg_command(cmd, "添加TV图片")
+            
+            # 验证输出文件
+            if os.path.exists(output_video):
+                file_size = os.path.getsize(output_video)
+                logger.info(f"TV图片叠加完成，输出文件已生成: {output_video}")
+                logger.info(f"输出文件大小: {file_size / (1024*1024):.2f} MB")
+            else:
+                logger.error(f"输出文件未生成: {output_video}")
+        except Exception as e:
+            logger.error(f"处理TV图片叠加时出错: {str(e)}")
+            
+    else:
+        logger.warning(f"TV图片文件不存在: {tv_image}")
+        logger.info(f"当前工作目录: {os.getcwd()}")
+        logger.info(f"检查assets目录:")
+        if os.path.exists("assets"):
+            logger.info("assets目录存在")
+            logger.info("assets目录内容:")
+            for file in os.listdir("assets"):
+                logger.info(f"  - {file}")
+        else:
+            logger.warning("assets目录不存在")
+        
+        # 如果图片不存在，直接复制输入文件到输出
+        import shutil
+        logger.info(f"复制输入文件到输出: {input_video} -> {output_video}")
+        shutil.copy2(input_video, output_video)
+    
+    logger.info("=== TV图片叠加处理结束 ===\n")
+
 def combine_videos(background_video, main_video, side_videos, output_path, main_x=0, side_x=None, title1="默认主标题", title2="默认副标题", bottom_text="默认底部文字"):
     """合并所有视频
     Args:
@@ -456,6 +570,8 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
     Returns:
         str: 输出文件路径
     """
+    logger.info("\n=== 开始视频合成处理 ===")
+    
     # 确保输出目录存在
     output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
@@ -464,12 +580,13 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
     if output_path.endswith('.mp4.mp4'):
         output_path = output_path[:-4]
     
-    print(f"\n输出文件: {os.path.basename(output_path)}")
-    print(f"输出目录: {output_dir}")
+    logger.info(f"输出文件: {os.path.basename(output_path)}")
+    logger.info(f"输出目录: {output_dir}")
     
     # 获取主视频尺寸和时长
     width, height = get_video_dimensions(main_video)
     main_duration = get_video_duration(main_video)
+    logger.info(f"主视频尺寸: {width}x{height}, 时长: {main_duration:.2f}秒")
     
     # 如果没有指定右侧视频位置，则紧贴左侧视频
     if side_x is None:
@@ -480,6 +597,7 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
     input_args = []
     for input_file in inputs:
         input_args.extend(['-i', input_file])
+        logger.info(f"添加输入文件: {input_file}")
     
     filter_complex = []
     # 设置背景视频
@@ -498,23 +616,15 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
     for video in side_videos:
         duration = get_video_duration(video)
         video_durations.append(duration)
-        print(f"视频时长: {duration:.2f}秒")
+        logger.info(f"右侧视频时长: {duration:.2f}秒")
     
     # 处理每个视频
     for i in range(len(side_videos)):
-        # 如果当前时间已经超过主视频时长，就不再添加更多视频
-        if current_time >= main_duration:
-            break
-            
         filter_complex.append(f'[{i+2}:v]setpts=PTS-STARTPTS+{current_time}/TB[side{i}]')
         next_bg = f'bg{i+2}'
-        
-        # 计算这个视频的结束时间，如果超过主视频时长，则裁切
-        end_time = min(current_time + video_durations[i], main_duration)
-        
         filter_complex.append(
             f'[{last_bg}][side{i}]overlay=x={side_x}:y=(H-h)/2:'
-            f'enable=\'between(t,{current_time},{end_time})\''
+            f'enable=\'between(t,{current_time},{current_time + video_durations[i]})\''
             f'[{next_bg}]'
         )
         last_bg = next_bg
@@ -522,6 +632,12 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
     
     # 完成视频合并
     filter_str = ';'.join(filter_complex)
+    logger.info(f"滤镜命令: {filter_str}")
+    
+    # 使用临时文件保存中间结果
+    temp_output = output_path.replace('.mp4', '_temp.mp4')
+    logger.info(f"临时文件路径: {temp_output}")
+    
     cmd = ['ffmpeg', '-y'] + input_args + [
         '-filter_complex', filter_str,
         '-map', f'[{last_bg}]',
@@ -537,12 +653,33 @@ def combine_videos(background_video, main_video, side_videos, output_path, main_
         '-c:a', 'aac',
         '-b:a', '192k',
         '-shortest',
-        output_path
+        temp_output
     ]
     
-    print("\n完整的ffmpeg命令:")
-    print(' '.join(cmd))
+    logger.info("执行视频合并命令:")
+    logger.info(' '.join(cmd))
     
-    run_ffmpeg_command(cmd, "合并视频")
+    try:
+        run_ffmpeg_command(cmd, "合并视频")
+        if os.path.exists(temp_output):
+            logger.info("视频合并成功，开始添加TV图片")
+            
+            # 最后添加TV图片叠加
+            add_tv_overlay(temp_output, output_path)
+            
+            # 清理临时文件
+            if os.path.exists(temp_output):
+                logger.info(f"清理临时文件: {temp_output}")
+                os.remove(temp_output)
+            
+            if os.path.exists(output_path):
+                logger.info(f"视频处理完成，输出文件: {output_path}")
+            else:
+                logger.error("最终输出文件未生成")
+        else:
+            logger.error("视频合并失败，临时文件未生成")
+    except Exception as e:
+        logger.error(f"视频处理过程中出错: {str(e)}")
     
+    logger.info("=== 视频合成处理结束 ===\n")
     return output_path 

@@ -20,8 +20,8 @@ logging.basicConfig(
 )
 
 # 火山引擎配置
-appid = "1402533456"
-access_token = "fu4zpJrErgp75YT7l727IVBFs83I_i4M"
+appid = "4824282690"
+access_token = "4nv7WXFZ2RmDhOkntKIOCntlXk-BLUc4"
 cluster = "volcano_tts"
 host = "openspeech.bytedance.com"
 api_url = f"https://{host}/api/v1/tts"

@@ -21,6 +21,9 @@ TEXT_SETTINGS = {
     'TITLE2_Y': 200,            # 副标题垂直位置
     'TITLE_FONT_SIZE': 120,     # 顶部文字基准大小
     'BOTTOM_FONT_SIZE': 100,    # 底部文字基准大小
+    'TEXT_OVERLAY_DURATION': 4, # 文字叠加显示持续时间（秒）
+    'FADE_IN_DURATION': 0,      # 文字淡入时间（秒），设置为0表示不使用淡入效果
+    'FADE_OUT_DURATION': 0.5,   # 文字淡出时间（秒）
 }
 
 # 字体配置
@@ -36,14 +39,4 @@ PATH_SETTINGS = {
     'PIP2_FOLDER': "assets/pip2_videos",  # 侧视频目录
     'OUTPUTS_FOLDER': "outputs",          # 输出目录
     'TEMP_DIR': "temp"                    # 临时文件夹
-}
-
-# 字幕背景设置
-SUBTITLE_BACKGROUND = {
-    'WIDTH': 600,                # 黄色背景的宽度（像素）
-    'HEIGHT': 150,               # 黄色背景的高度（像素）
-    'COLOR': (0, 255, 255),      # 背景颜色，BGR格式：(Blue=0, Green=255, Red=255) 表示黄色
-    'POSITION_X': 'center',      # 水平位置：'center'表示居中，或具体的像素值
-    'POSITION_Y': 120,           # 垂直位置：距离顶部的像素值
-    'SHOW_TIME': 6               # 开始显示的时间（秒）
 } 

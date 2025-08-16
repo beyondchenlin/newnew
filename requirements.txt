@@ -2,17 +2,24 @@
 numpy>=1.21.0
 pandas>=1.3.0
 
+# AI和API依赖
+openai>=1.0.0          # 通义千问API客户端
+requests>=2.25.0       # HTTP请求库（火山引擎TTS）
+
 # 视频处理
-opencv-python>=4.5.0
-ffmpeg-python>=0.2.0
+opencv-python>=4.5.0   # OpenCV视频处理
+ffmpeg-python>=0.2.0   # FFmpeg Python绑定
 
 # 图像处理
-Pillow>=8.2.0
+Pillow>=8.2.0          # PIL图像处理库
+
+# 系统监控
+psutil>=5.8.0          # 系统性能监控
 
 # 终端美化
-rich>=10.0.0
+rich>=10.0.0           # 终端输出美化
 
 # 开发工具
-pytest>=6.0.0  # 测试框架
-black>=21.0.0  # 代码格式化
-flake8>=3.9.0  # 代码检查 
+pytest>=6.0.0         # 测试框架
+black>=21.0.0          # 代码格式化
+flake8>=3.9.0          # 代码检查

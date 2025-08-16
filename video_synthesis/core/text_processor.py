@@ -3,9 +3,7 @@
 """
 import os
 from PIL import Image, ImageDraw, ImageFont
-from video_synthesis.config.settings import TEXT_SETTINGS, FONT_OPTIONS, SUBTITLE_BACKGROUND
-import cv2
-import numpy as np
+from video_synthesis.config.settings import TEXT_SETTINGS, FONT_OPTIONS
 
 def calculate_font_size(text: str, base_size: int, max_width: int, font_path: str) -> int:
     """计算适合的字体大小
@@ -94,7 +92,7 @@ def create_text_overlay(title1: str, title2: str, bottom_text: str, width: int, 
     title2_x, _, title2_width, title2_height = get_text_position(
         title2, title2_font, TEXT_SETTINGS['TOP_MARGIN_X'], TEXT_SETTINGS['TITLE2_Y'])
     bottom_x, bottom_y, bottom_width, bottom_height = get_text_position(
-        bottom_text, bottom_font, TEXT_SETTINGS['BOTTOM_MARGIN_X'], height * 4 // 5)
+        bottom_text, bottom_font, TEXT_SETTINGS['BOTTOM_MARGIN_X'], int(height * 8.5 / 10))
     
     # 特效参数
     depth = 8              # 3D效果深度
@@ -139,30 +137,3 @@ def create_text_overlay(title1: str, title2: str, bottom_text: str, width: int, 
     temp_path = os.path.join("temp", "text_overlay.png")
     img.save(temp_path)
     return temp_path 
-
-def create_subtitle_background(width=None, height=None, color=None):
-    """创建英文字幕的背景图片
-    Args:
-        width: 背景宽度，默认使用配置值
-        height: 背景高度，默认使用配置值
-        color: 背景颜色，默认使用配置值
-    Returns:
-        str: 临时背景图片的路径
-    """
-    # 使用配置值或传入的参数
-    width = width or SUBTITLE_BACKGROUND['WIDTH']
-    height = height or SUBTITLE_BACKGROUND['HEIGHT']
-    color = color or SUBTITLE_BACKGROUND['COLOR']
-    
-    # 创建一个固定尺寸的黄色背景图片
-    background = np.full((height, width, 4), (color[0], color[1], color[2], 255), dtype=np.uint8)
-    
-    # 保存图片
-    temp_dir = "temp"
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)
-    
-    output_path = os.path.join(temp_dir, "subtitle_background.png")
-    cv2.imwrite(output_path, background)
-    
-    return output_path 

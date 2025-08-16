@@ -26,7 +26,7 @@ from .core.video_processor import (
     create_side_video,
     process_pip2_videos
 )
-from .core.video_combiner import combine_videos
+from .core.video_combiner import combine_videos, add_image_overlay
 
 # 创建rich控制台对象
 console = Console()
@@ -109,6 +109,31 @@ def parse_args():
                        help='Excel文件路径，包含要添加的文字内容')
     return parser.parse_args()
 
+def get_next_sequence_number(base_dir: str) -> str:
+    """
+    获取下一个可用的序列号目录
+    
+    Args:
+        base_dir (str): 基础目录路径
+        
+    Returns:
+        str: 下一个可用的4位序列号（如：'0001'）
+    """
+    if not os.path.exists(base_dir):
+        return "0001"
+        
+    # 获取所有4位数字命名的目录
+    existing_dirs = [d for d in os.listdir(base_dir) 
+                    if os.path.isdir(os.path.join(base_dir, d)) and 
+                    d.isdigit() and len(d) == 4]
+    
+    if not existing_dirs:
+        return "0001"
+    
+    # 找到最大的序号并加1
+    max_num = max(int(d) for d in existing_dirs)
+    return f"{max_num + 1:04d}"
+
 def process_single_video(pip1_folder, pip2_folder, outputs_folder, temp_dir, background_type, excel_path):
     """处理单个视频的函数"""
     start_time = time.time()
@@ -123,7 +148,12 @@ def process_single_video(pip1_folder, pip2_folder, outputs_folder, temp_dir, bac
     # 创建与源视频文件夹同名的输出子文件夹
     output_subfolder = os.path.join(outputs_folder, video_name)
     os.makedirs(output_subfolder, exist_ok=True)
-    console.print(f"[green]创建输出子文件夹: {output_subfolder}")
+    
+    # 获取序列号并创建序列号子文件夹
+    sequence_number = get_next_sequence_number(output_subfolder)
+    sequence_subfolder = os.path.join(output_subfolder, sequence_number)
+    os.makedirs(sequence_subfolder, exist_ok=True)
+    console.print(f"[green]创建输出子文件夹: {sequence_subfolder}")
     
     # 读取Excel文件中的文字内容
     title1, title2, bottom_text = read_text_from_excel(csv_path)
@@ -142,8 +172,8 @@ def process_single_video(pip1_folder, pip2_folder, outputs_folder, temp_dir, bac
     if not filename.endswith('.mp4'):
         filename = f"{filename}.mp4"
     
-    # 构建输出路径
-    output_path = os.path.join(output_subfolder, filename)
+    # 构建输出路径（现在包含序列号子文件夹）
+    output_path = os.path.join(sequence_subfolder, filename)
     console.print(f"[bold cyan]输出路径: {output_path}")
     
     # 设置高斯模糊程度（较强的模糊效果）
@@ -201,6 +231,21 @@ def process_single_video(pip1_folder, pip2_folder, outputs_folder, temp_dir, bac
         bottom_text=bottom_text,
         add_subtitles=True
     )
+    
+    # 7. 添加图片叠加
+    console.print("\n[bold cyan]7. 添加图片叠加")
+    tv_overlay_path = os.path.join("assets", "tv.png")
+    if os.path.exists(tv_overlay_path):
+        temp_output = os.path.join(temp_dir, "temp_output.mp4")
+        # 将当前输出文件移动到临时文件
+        os.rename(output_path, temp_output)
+        # 添加图片叠加
+        add_image_overlay(temp_output, tv_overlay_path, output_path)
+        # 删除临时文件
+        os.remove(temp_output)
+        console.print("[green]成功添加电视机边框效果")
+    else:
+        console.print("[yellow]警告: 未找到tv.png文件，跳过图片叠加步骤")
     
     # 获取视频时长
     video_duration = get_video_duration(output_path)

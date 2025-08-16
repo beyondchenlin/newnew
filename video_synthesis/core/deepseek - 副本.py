@@ -11,7 +11,7 @@ from openai import OpenAI
 from typing import List, Dict, Tuple
 
 # 通义千问 API配置
-QIANWEN_API_KEY = "sk-52c8e3f759b647268170e216f2f57ba7"
+QIANWEN_API_KEY = "sk-17d366fd6a8c450e8d08313ead5f24a9"
 QIANWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 class AnalysisHistory:
@@ -68,89 +68,6 @@ class AnalysisHistory:
         self.history[category].add(text)
         self._save_history()
 
-class ExtractedContentManager:
-    """管理已提取内容的类"""
-    
-    def __init__(self):
-        """初始化已提取内容管理器"""
-        self.extracted_contents = {
-            "vocabulary": [],  # 改用列表存储，包含单词和时间信息
-            "phrases": [],
-            "expressions": []
-        }
-    
-    def _is_time_overlap(self, start_time1: str, end_time1: str, start_time2: str, end_time2: str) -> bool:
-        """
-        检查两个时间段是否重叠
-        
-        Args:
-            start_time1: 第一个时间段的开始时间
-            end_time1: 第一个时间段的结束时间
-            start_time2: 第二个时间段的开始时间
-            end_time2: 第二个时间段的结束时间
-        Returns:
-            bool: 是否重叠
-        """
-        def time_to_seconds(time_str: str) -> float:
-            """将时间字符串转换为秒数"""
-            h, m, s = time_str.split(':')
-            s, ms = s.split(',')
-            return float(h) * 3600 + float(m) * 60 + float(s) + float(ms) / 1000
-        
-        start1 = time_to_seconds(start_time1)
-        end1 = time_to_seconds(end_time1)
-        start2 = time_to_seconds(start_time2)
-        end2 = time_to_seconds(end_time2)
-        
-        # 检查时间段是否重叠
-        return not (end1 < start2 or start1 > end2)
-    
-    def is_duplicate(self, text: str, category: str, start_time: str, end_time: str) -> bool:
-        """
-        检查内容在指定类别中是否重复或时间重叠
-        
-        Args:
-            text: 要检查的文本
-            category: 类别（vocabulary/phrases/expressions）
-            start_time: 开始时间
-            end_time: 结束时间
-        Returns:
-            bool: 是否重复或时间重叠
-        """
-        text_lower = text.lower()
-        for item in self.extracted_contents[category]:
-            # 检查单词是否相同
-            if text_lower == item["text"].lower():
-                return True
-            # 检查时间是否重叠
-            if self._is_time_overlap(start_time, end_time, item["start_time"], item["end_time"]):
-                return True
-        return False
-    
-    def add_content(self, text: str, category: str, start_time: str, end_time: str):
-        """
-        添加新的内容到指定类别
-        
-        Args:
-            text: 要添加的文本
-            category: 类别（vocabulary/phrases/expressions）
-            start_time: 开始时间
-            end_time: 结束时间
-        """
-        self.extracted_contents[category].append({
-            "text": text.lower(),
-            "start_time": start_time,
-            "end_time": end_time
-        })
-    
-    def clear(self):
-        """清空已提取的内容"""
-        self.extracted_contents = {
-            "vocabulary": [],
-            "phrases": [],
-            "expressions": []
-        }
-
 class SubtitleAnalyzer:
     """字幕分析器类"""
     
@@ -166,8 +83,6 @@ class SubtitleAnalyzer:
             "phrases": ["segment_2", "segment_5"],
             "expressions": ["segment_3", "segment_6"]
         }
-        # 添加内容管理器
-        self.content_manager = ExtractedContentManager()
 
     def parse_timestamp(self, timestamp: str) -> Tuple[int, int, int, int]:
         """
@@ -186,7 +101,7 @@ class SubtitleAnalyzer:
             int(time_parts[2]),  # 秒
             int(time_parts[3])   # 毫秒
         )
-        
+
     def time_to_seconds(self, time_str: str) -> float:
         """
         将时间戳转换为秒数
@@ -260,7 +175,7 @@ class SubtitleAnalyzer:
 
     def analyze_segment(self, segment_name: str, segment_subtitles: List[Dict], category: str) -> Dict:
         """
-        分析单个时间段的字幕内容，处理重复内容
+        分析单个时间段的字幕内容
         
         Args:
             segment_name: 时间段名称
@@ -269,104 +184,87 @@ class SubtitleAnalyzer:
         Returns:
             Dict: 提取结果
         """
-        max_retries = 3  # 最大重试次数
-        current_try = 0
+        prompt = f"""
+        你是一位英语教学专家。现在请从给定的字幕中提取一个{category}并翻译。
+
+        当前时间段：{segment_name}
+        提取类别：{category}
         
-        # 将segment_name转换为数字
-        segment_number = int(segment_name.split('_')[1])
+        字幕内容：
+        {json.dumps(segment_subtitles, ensure_ascii=False, indent=2)}
         
-        while current_try < max_retries:
+        要求：
+        1. 只提取一个内容
+        2. 必须从当前时间段的字幕中选择
+        3. 不要选择被标记为skip_extract的内容
+        4. 必须严格按照以下JSON格式返回，不要有任何其他内容：
+        {{
+            "segment": "{segment_name}",
+            "text": "提取的内容",
+            "chinese": "中文翻译",
+            "notes": "词性和使用场景说明",
+            "verified": true
+        }}
+        
+        注意：
+        1. 如果是vocabulary，提取单词
+        2. 如果是phrases，提取2-4个词的短语
+        3. 如果是expressions，提取完整句子或表达
+        4. notes字段需要包含词性和使用场景的说明
+        """
+        
+        try:
+            completion = self.client.chat.completions.create(
+                model="qwen-max",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是一位专业的英语教学专家。你的任务是从字幕中提取内容并翻译。你必须严格按照指定的JSON格式返回结果，不要包含任何额外的解释或文本。"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.3
+            )
+            
+            content = completion.choices[0].message.content
+            # 添加日志，查看原始返回内容
+            logging.info(f"API返回的原始内容: {content}")
+            
+            # 清理可能的markdown格式
+            content = content.strip()
+            if content.startswith("```json"):
+                content = content.split("\n", 1)[1]
+            if content.endswith("```"):
+                content = content.rsplit("\n", 1)[0]
+            content = content.strip()
+            
+            # 添加日志，查看清理后的内容
+            logging.info(f"清理后的内容: {content}")
+            
             try:
-                prompt = f"""
-                你是一位英语教学专家。现在请从给定的字幕中提取一个单词并翻译。
-                
-                当前时间段：{segment_name}
-                提取类别：{category}
-                
-                字幕内容：
-                {json.dumps(segment_subtitles, ensure_ascii=False, indent=2)}
-                
-                要求：
-                1. 从字幕中提取任意一个英文单词（可以是任何单词，包括is、a、the等）
-                2. 必须从当前时间段的字幕文本中选择
-                3. 不要选择被标记为skip_extract的内容
-                4. 必须严格按照以下JSON格式返回，不要有任何其他内容：
-                {{
-                    "segment": {segment_number},
-                    "text": "提取的单词",
-                    "chinese": "中文翻译",
-                    "notes": "词性和使用场景说明",
-                    "verified": true,
-                    "start_time": "从字幕中提取的开始时间",
-                    "end_time": "从字幕中提取的结束时间",
-                    "original_subtitle": "单词所在的完整字幕文本"
-                }}
-                
-                注意：
-                1. 可以提取任何英文单词，不限词性和重要性
-                2. 单词必须是字幕中实际出现的
-                3. notes字段需要包含词性和基本用法说明
-                4. start_time和end_time必须从原始字幕中提取，格式为"HH:MM:SS,mmm"
-                5. original_subtitle必须是完整的字幕文本
-                6. 不要选择在当前类别中已经使用过的单词
-                7. 选择的单词的时间段不能与已选择的单词时间重叠
-                """
-                
-                completion = self.client.chat.completions.create(
-                    model="qwen-max",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "你是一位专业的英语教学专家。你的任务是从字幕中提取内容并翻译。你必须严格按照指定的JSON格式返回结果，不要包含任何额外的解释或文本。"
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    temperature=0.3
-                )
-                
-                content = completion.choices[0].message.content
-                content = content.strip()
-                if content.startswith("```json"):
-                    content = content.split("\n", 1)[1]
-                if content.endswith("```"):
-                    content = content.rsplit("\n", 1)[0]
-                content = content.strip()
-                
                 result = json.loads(content)
-                
-                # 确保segment是数字
-                if isinstance(result["segment"], str) and result["segment"].startswith("segment_"):
-                    result["segment"] = int(result["segment"].split("_")[1])
-                
-                # 检查是否在当前类别中重复或时间重叠
-                if not self.content_manager.is_duplicate(
-                    result["text"], 
-                    category,
-                    result["start_time"],
-                    result["end_time"]
-                ):
-                    # 不重复且时间不重叠，添加到已提取内容并返回
-                    self.content_manager.add_content(
-                        result["text"], 
-                        category,
-                        result["start_time"],
-                        result["end_time"]
-                    )
+                # 验证返回的数据格式
+                required_fields = ["segment", "text", "chinese", "notes", "verified"]
+                if all(field in result for field in required_fields):
+                    # 将 segment_X 转换为数字
+                    if isinstance(result["segment"], str) and result["segment"].startswith("segment_"):
+                        result["segment"] = int(result["segment"].split("_")[1])
                     return result
+                else:
+                    logging.error(f"返回的数据缺少必要字段: {result}")
+                    return None
+                    
+            except json.JSONDecodeError as e:
+                logging.error(f"JSON解析错误: {str(e)}")
+                logging.error(f"导致错误的内容: {content}")
+                return None
                 
-                # 如果重复或时间重叠，继续下一次尝试
-                current_try += 1
-                logging.info(f"在类别 {category} 中发现重复内容或时间重叠 '{result['text']}'，尝试重新提取 (尝试 {current_try}/{max_retries})")
-                
-            except Exception as e:
-                logging.error(f"分析时间段失败: {str(e)}")
-                current_try += 1
-        
-        logging.error(f"达到最大重试次数 ({max_retries})，无法在类别 {category} 中获取不重复且时间不重叠的内容")
-        return None
+        except Exception as e:
+            logging.error(f"分析时间段失败: {str(e)}")
+            return None
 
     def extract_words_by_plan(self, segmented_subtitles: Dict) -> Dict:
         """
@@ -419,10 +317,7 @@ class SubtitleAnalyzer:
                 return False
                 
             # 检查每个项目的必要字段
-            required_fields = [
-                "segment", "text", "chinese", "notes", "verified",
-                "start_time", "end_time", "original_subtitle"
-            ]
+            required_fields = ["segment", "text", "chinese", "notes", "verified"]
             for category in required_categories:
                 for item in results[category]:
                     if not all(field in item for field in required_fields):
@@ -437,18 +332,6 @@ class SubtitleAnalyzer:
                     # 检查verified是否为布尔值
                     if not isinstance(item["verified"], bool):
                         logging.error(f"verified必须为布尔值: {item}")
-                        return False
-                    
-                    # 检查时间戳格式
-                    time_pattern = r'^\d{2}:\d{2}:\d{2},\d{3}$'
-                    if not (re.match(time_pattern, item["start_time"]) and 
-                           re.match(time_pattern, item["end_time"])):
-                        logging.error(f"时间戳格式不正确: {item}")
-                        return False
-                    
-                    # 检查original_subtitle是否为非空字符串
-                    if not isinstance(item["original_subtitle"], str) or not item["original_subtitle"].strip():
-                        logging.error(f"original_subtitle必须是非空字符串: {item}")
                         return False
                     
             return True
@@ -467,9 +350,6 @@ class SubtitleAnalyzer:
             Dict: 处理结果
         """
         try:
-            # 清空已提取内容记录
-            self.content_manager.clear()
-            
             # 1. 读取字幕文件
             subtitles = self.read_srt_file(file_path)
             
@@ -483,14 +363,6 @@ class SubtitleAnalyzer:
             if not self.validate_results(results):
                 logging.error("结果验证失败")
                 return None
-                
-            # 5. 添加video_info
-            folder = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-            subtitle_file = os.path.basename(file_path)
-            results["video_info"] = {
-                "folder": folder,
-                "subtitle_file": subtitle_file
-            }
             
             return results
             
@@ -548,7 +420,7 @@ class SubtitleAnalyzer:
             subtitles.append(current_subtitle)
             
         return subtitles
-    
+
     def verify_timestamp(self, srt_file: str, analysis_result: Dict) -> Dict:
         """验证时间戳并返回验证后的结果
         

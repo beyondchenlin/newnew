@@ -16,6 +16,7 @@ class VideoTypes:
     ZH = "zh"
     NOTES = "notes"
     COMPLETE = "complete"
+    ENZH = "enzh"  # 新增 ENZH 类型
 
 class VideoClipper:
     """视频剪辑器"""
@@ -26,15 +27,13 @@ class VideoClipper:
             video_path: 视频文件路径
             json_path: 分析结果JSON文件路径
             audio_dir: 音频文件目录
-            generate_types: 需要生成的视频类型列表，默认只生成complete版本
+            generate_types: 要生成的视频类型列表，默认为["enzh"]
         """
         self.video_path = video_path
         self.json_path = json_path
         self.audio_dir = audio_dir
         self.output_dir = "output/clips"  # 默认输出目录
-        
-        # 设置需要生成的视频类型
-        self.generate_types = generate_types if generate_types is not None else [VideoTypes.COMPLETE]
+        self.generate_types = generate_types if generate_types is not None else ["enzh"]  # 设置默认生成类型
         
         # 配置日志
         self.logger = self._setup_logger()
@@ -128,14 +127,35 @@ class VideoClipper:
         
         base_path = os.path.join(self.audio_dir, item_type, clean_id)
         
+        self.logger.info(f"\n开始查找音频文件:")
+        self.logger.info(f"- 项目类型: {item_type}")
+        self.logger.info(f"- 项目ID: {item_id}")
+        self.logger.info(f"- 清理后ID: {clean_id}")
+        self.logger.info(f"- 基础路径: {base_path}")
+        
         paths = {}
         for audio_type in ['en', 'zh', 'notes']:
             path = f"{base_path}_{audio_type}.mp3"
+            self.logger.info(f"\n检查音频文件: {path}")
             if os.path.exists(path):
                 paths[audio_type] = path
-                print(f"✅ 找到音频文件: {path}")
+                self.logger.info(f"✅ 找到音频文件: {path}")
+                # 检查文件大小
+                file_size = os.path.getsize(path)
+                self.logger.info(f"   文件大小: {file_size/1024:.2f} KB")
             else:
-                print(f"❌ 未找到音频文件: {path}")
+                self.logger.warning(f"❌ 未找到音频文件: {path}")
+                # 检查目录是否存在
+                dir_path = os.path.dirname(path)
+                if not os.path.exists(dir_path):
+                    self.logger.error(f"❌ 目录不存在: {dir_path}")
+                
+        if not paths:
+            self.logger.error(f"❌ 未找到任何音频文件")
+        else:
+            self.logger.info(f"\n找到的音频文件:")
+            for audio_type, path in paths.items():
+                self.logger.info(f"- {audio_type}: {path}")
                 
         return paths
         
@@ -183,15 +203,7 @@ class VideoClipper:
             return 0.0
         
     def _clip_video(self, start_time: float, end_time: float, audio_path: str, output_path: str) -> bool:
-        """剪辑视频片段
-        Args:
-            start_time: 开始时间（秒）
-            end_time: 结束时间（秒）
-            audio_path: 音频文件路径
-            output_path: 输出文件路径
-        Returns:
-            bool: 是否成功
-        """
+        """剪辑视频片段"""
         try:
             # 1. 获取音频时长
             audio_duration = self._get_audio_duration(audio_path)
@@ -199,88 +211,49 @@ class VideoClipper:
                 print(f"❌ 音频时长为0，跳过处理")
                 return False
                 
-            # 2. 计算视频片段时长
-            video_duration = end_time - start_time
-            print(f"📊 视频片段信息:")
-            print(f"   - 开始时间: {start_time:.3f}秒")
-            print(f"   - 结束时间: {end_time:.3f}秒") 
-            print(f"   - 视频时长: {video_duration:.3f}秒")
-            print(f"   - 音频时长: {audio_duration:.3f}秒")
+            # 2. 创建模糊定格视频
+            blur_video = self._create_blurred_freeze_video(
+                self.video_path,
+                start_time,
+                audio_duration
+            )
             
-            # 3. 计算需要定格的时长
-            freeze_duration = max(0, audio_duration - video_duration)
-            print(f"⏱️ 定格信息:")
-            print(f"   - 需要定格: {freeze_duration:.3f}秒")
-            
-            # 4. 剪辑视频到临时文件（使用详细的编码参数）
-            temp_video = output_path + ".temp.mp4"
-            cmd = [
-                'ffmpeg', '-y',
-                '-i', self.video_path,
-                '-ss', f"{start_time:.3f}",
-                '-t', f"{video_duration:.3f}",
-                '-vf', f"tpad=stop_mode=clone:stop_duration={freeze_duration}",
-                # 视频编码参数
-                '-c:v', 'libx264',
-                '-profile:v', 'high',
-                '-preset', 'fast',
-                '-crf', '23',
-                '-r', '30',  # 30fps
-                '-b:v', '2500k',  # 2500kb/s比特率
-                '-maxrate', '3000k',
-                '-bufsize', '6000k',
-                '-pix_fmt', 'yuv420p',
-                # 移除音频
-                '-an',
-                temp_video
-            ]
-            
-            print(f"🎬 剪辑视频命令:")
-            print(f"   {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"❌ 剪辑视频失败:")
-                print(f"   错误输出: {result.stderr}")
+            if not blur_video:
                 return False
-            
-            # 5. 合并视频和音频（使用详细的音频编码参数）
+                
+            # 3. 合并视频和音频
             cmd = [
                 'ffmpeg', '-y',
-                '-i', temp_video,
+                '-i', blur_video,
                 '-i', audio_path,
-                # 复制视频流
                 '-c:v', 'copy',
-                # 音频编码参数
                 '-c:a', 'aac',
                 '-b:a', '192k',
                 '-ar', '44100',
-                '-ac', '2',  # 立体声
+                '-ac', '2',
                 output_path
             ]
             
             print(f"🔊 合并音频命令:")
             print(f"   {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            # 4. 清理临时文件
+            if os.path.exists(blur_video):
+                os.remove(blur_video)
+                print(f"🧹 清理临时文件: {blur_video}")
+            
             if result.returncode != 0:
                 print(f"❌ 合并音频失败:")
                 print(f"   错误输出: {result.stderr}")
                 return False
             
-            # 6. 清理临时文件
-            if os.path.exists(temp_video):
-                os.remove(temp_video)
-                print(f"🧹 清理临时文件: {temp_video}")
-            
             return True
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ 处理视频片段失败: {str(e)}")
-            print(f"错误输出: {e.stderr.decode('utf-8', errors='ignore')}")
-            return False
         except Exception as e:
             print(f"❌ 处理视频片段失败: {str(e)}")
             return False
-            
+
     def _merge_audio_files(self, audio_paths: Dict[str, str], output_audio: str) -> bool:
         """合并多个音频文件，按固定顺序：en -> zh -> notes"""
         try:
@@ -289,7 +262,7 @@ class VideoClipper:
             self.logger.info(f"- 输出路径: {output_audio}")
             
             # 按固定顺序准备音频文件
-            audio_sequence = ['en', 'zh', 'notes']
+            audio_sequence = ['en', 'zh']  # 只使用英文和中文
             audio_files = []
             
             # 验证所有必需的音频文件
@@ -343,7 +316,7 @@ class VideoClipper:
                 self.logger.error(f"错误输出: {result.stderr}")
                 return False
                 
-            # 检查合并后的音频文件大小
+            # 检查合并后的音频文件
             if not os.path.exists(output_audio):
                 self.logger.error(f"合并后的音频文件不存在: {output_audio}")
                 return False
@@ -361,31 +334,37 @@ class VideoClipper:
             self.logger.error(f"合并音频失败: {str(e)}", exc_info=True)
             return False
 
-    def _create_blurred_freeze_video(self, video_path: str, duration: float, blur_strength: int = 20) -> str:
-        """创建模糊定格视频"""
+    def _create_blurred_freeze_video(self, video_path: str, start_time: float, duration: float, blur_strength: int = 20) -> str:
+        """创建模糊定格视频
+        Args:
+            video_path: 输入视频路径
+            start_time: 开始时间点（用于提取第一帧）
+            duration: 定格持续时长
+            blur_strength: 模糊强度
+        """
         try:
             self.logger.info(f"开始创建模糊定格视频:")
             self.logger.info(f"- 输入视频: {video_path}")
+            self.logger.info(f"- 开始时间: {start_time:.3f}秒")
             self.logger.info(f"- 定格时长: {duration:.3f}秒")
             self.logger.info(f"- 模糊强度: {blur_strength}")
             
             # 临时文件路径
             temp_dir = os.path.dirname(video_path)
-            temp_frame = os.path.join(temp_dir, "temp_last_frame.png")
+            temp_frame = os.path.join(temp_dir, "temp_first_frame.png")
             temp_blur_video = os.path.join(temp_dir, "temp_blur.mp4")
             
-            # 1. 提取最后一帧并应用模糊效果
+            # 1. 提取指定时间点的帧并应用模糊效果
             cmd = [
                 'ffmpeg', '-y',
-                '-sseof', '-1',  # 从视频末尾开始
+                '-ss', f"{start_time:.3f}",  # 从指定时间点开始
                 '-i', video_path,
-                '-update', '1',   # 只更新一帧
+                '-vframes', '1',  # 只提取一帧
                 '-vf', f"boxblur={blur_strength}:2:{blur_strength}:2:0",
-                '-frames:v', '1',
                 temp_frame
             ]
             
-            self.logger.info(f"提取并模糊最后一帧:")
+            self.logger.info(f"提取并模糊第一帧:")
             self.logger.info(f"命令: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             
@@ -398,7 +377,7 @@ class VideoClipper:
                 self.logger.error(f"提取的帧文件不存在: {temp_frame}")
                 return None
             
-            self.logger.info(f"成功提取并模糊最后一帧: {temp_frame}")
+            self.logger.info(f"成功提取并模糊第一帧: {temp_frame}")
             
             # 2. 将模糊帧转换为视频
             cmd = [
@@ -409,7 +388,7 @@ class VideoClipper:
                 '-c:v', 'libx264',
                 '-tune', 'stillimage',
                 '-pix_fmt', 'yuv420p',
-                '-b:v', '2500k',  # 添加视频比特率
+                '-b:v', '2500k',
                 temp_blur_video
             ]
             
@@ -430,7 +409,7 @@ class VideoClipper:
             if not os.path.exists(temp_blur_video):
                 self.logger.error(f"生成的模糊视频文件不存在: {temp_blur_video}")
                 return None
-                
+            
             # 验证生成的视频文件大小
             video_size = os.path.getsize(temp_blur_video)
             if video_size == 0:
@@ -446,7 +425,7 @@ class VideoClipper:
             return None
 
     def _create_complete_version(self, start_time: float, end_time: float, 
-                               audio_paths: Dict[str, str], output_path: str) -> bool:
+                           audio_paths: Dict[str, str], output_path: str) -> bool:
         """创建完整版视频（包含所有音频）"""
         try:
             self.logger.info(f"\n开始创建完整版视频:")
@@ -461,7 +440,7 @@ class VideoClipper:
                 self.logger.error("合并音频文件失败")
                 return False
             
-            # 2. 获取合并后音频的总时长
+            # 2. 获取音频总时长
             total_audio_duration = self._get_audio_duration(temp_audio)
             if total_audio_duration == 0:
                 self.logger.error("获取音频时长失败或音频时长为0")
@@ -469,103 +448,25 @@ class VideoClipper:
                     os.remove(temp_audio)
                 return False
             
-            # 3. 计算视频片段时长
-            video_duration = end_time - start_time
-            self.logger.info(f"视频信息:")
-            self.logger.info(f"- 视频时长: {video_duration:.3f}秒")
-            self.logger.info(f"- 音频总时长: {total_audio_duration:.3f}秒")
+            # 3. 直接创建模糊定格视频（使用开始时间点的帧）
+            blur_video = self._create_blurred_freeze_video(
+                self.video_path,
+                start_time,
+                total_audio_duration
+            )
             
-            # 4. 计算需要定格的时长
-            freeze_duration = max(0, total_audio_duration - video_duration)
-            self.logger.info(f"定格信息:")
-            self.logger.info(f"- 需要定格: {freeze_duration:.3f}秒")
-            
-            # 5. 剪辑原始视频片段
-            temp_video = output_path + ".temp.mp4"
-            cmd = [
-                'ffmpeg', '-y',
-                '-i', self.video_path,
-                '-ss', f"{start_time:.3f}",
-                '-t', f"{video_duration:.3f}",
-                '-c:v', 'libx264',
-                '-profile:v', 'high',
-                '-preset', 'fast',
-                '-crf', '23',
-                '-r', '30',
-                '-pix_fmt', 'yuv420p',
-                '-an',
-                temp_video
-            ]
-            
-            self.logger.info(f"剪辑视频命令:")
-            self.logger.info(f"命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                self.logger.error(f"剪辑视频失败:")
-                self.logger.error(f"错误输出: {result.stderr}")
+            if not blur_video:
+                self.logger.error("创建模糊定格视频失败")
                 return False
             
-            # 6. 如果需要定格，创建模糊定格视频
-            if freeze_duration > 0:
-                self.logger.info(f"开始创建模糊定格部分...")
-                blur_video = self._create_blurred_freeze_video(temp_video, freeze_duration)
-                if not blur_video:
-                    self.logger.error("创建模糊定格视频失败")
-                    return False
-                
-                # 7. 拼接原视频和模糊定格视频
-                temp_concat = output_path + ".concat.txt"
-                with open(temp_concat, 'w', encoding='utf-8') as f:
-                    # 使用绝对路径
-                    temp_video_abs = os.path.abspath(temp_video)
-                    blur_video_abs = os.path.abspath(blur_video)
-                    f.write(f"file '{temp_video_abs}'\n")
-                    f.write(f"file '{blur_video_abs}'\n")
-                
-                final_video = output_path + ".final.mp4"
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-f', 'concat',
-                    '-safe', '0',
-                    '-i', temp_concat,
-                    '-c', 'copy',
-                    final_video
-                ]
-                
-                self.logger.info(f"拼接视频命令:")
-                self.logger.info(f"命令: {' '.join(cmd)}")
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                
-                # 更新临时视频路径
-                if os.path.exists(temp_video):
-                    os.remove(temp_video)
-                    self.logger.info(f"清理原始临时视频: {temp_video}")
-                temp_video = final_video
-                
-                # 清理临时文件
-                for temp_file in [blur_video, temp_concat]:
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
-                        self.logger.info(f"清理临时文件: {temp_file}")
-                
-                if result.returncode != 0:
-                    self.logger.error(f"拼接视频失败:")
-                    self.logger.error(f"错误输出: {result.stderr}")
-                    return False
-            else:
-                self.logger.info("无需创建定格部分，音频时长小于等于视频时长")
-            
-            # 8. 合并视频和音频
+            # 4. 合并模糊视频和音频
             cmd = [
                 'ffmpeg', '-y',
-                '-i', temp_video,
+                '-i', blur_video,
                 '-i', temp_audio,
                 '-c:v', 'copy',
                 '-c:a', 'aac',
                 '-b:a', '192k',
-                '-ar', '44100',
-                '-ac', '2',
                 output_path
             ]
             
@@ -573,11 +474,13 @@ class VideoClipper:
             self.logger.info(f"命令: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             
-            # 9. 清理所有临时文件
-            for temp_file in [temp_video, temp_audio]:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                    self.logger.info(f"清理临时文件: {temp_file}")
+            # 5. 清理临时文件
+            if os.path.exists(blur_video):
+                os.remove(blur_video)
+                self.logger.info(f"清理临时文件: {blur_video}")
+            if os.path.exists(temp_audio):
+                os.remove(temp_audio)
+                self.logger.info(f"清理临时文件: {temp_audio}")
             
             if result.returncode != 0:
                 self.logger.error(f"合并音频失败:")
@@ -595,6 +498,104 @@ class VideoClipper:
                 output_path + ".temp.mp4",
                 output_path + ".final.mp4",
                 output_path + ".concat.txt"
+            ]:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            return False
+
+    def _create_enzh_version(self, start_time: float, end_time: float, 
+                           audio_paths: Dict[str, str], output_path: str) -> bool:
+        """创建英文+中文版本视频
+        Args:
+            start_time: 开始时间
+            end_time: 结束时间
+            audio_paths: 音频文件路径字典
+            output_path: 输出视频路径
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            self.logger.info(f"\n开始创建英文+中文版本视频:")
+            self.logger.info(f"- 开始时间: {start_time:.3f}秒")
+            self.logger.info(f"- 结束时间: {end_time:.3f}秒")
+            self.logger.info(f"- 音频文件: {audio_paths}")
+            self.logger.info(f"- 输出路径: {output_path}")
+            
+            # 1. 检查必需的音频文件
+            required_types = ['en', 'zh']
+            enzh_audio_paths = {}
+            
+            for audio_type in required_types:
+                if audio_type not in audio_paths:
+                    self.logger.error(f"缺少{audio_type}音频文件")
+                    return False
+                if not os.path.exists(audio_paths[audio_type]):
+                    self.logger.error(f"音频文件不存在: {audio_paths[audio_type]}")
+                    return False
+                enzh_audio_paths[audio_type] = audio_paths[audio_type]
+            
+            # 2. 合并音频文件
+            temp_audio = output_path + ".temp.aac"
+            if not self._merge_audio_files(enzh_audio_paths, temp_audio):
+                self.logger.error("合并音频文件失败")
+                return False
+            
+            # 3. 获取音频总时长
+            total_audio_duration = self._get_audio_duration(temp_audio)
+            if total_audio_duration == 0:
+                self.logger.error("获取音频时长失败或音频时长为0")
+                if os.path.exists(temp_audio):
+                    os.remove(temp_audio)
+                return False
+            
+            # 4. 创建模糊定格视频
+            blur_video = self._create_blurred_freeze_video(
+                self.video_path,
+                start_time,
+                total_audio_duration
+            )
+            
+            if not blur_video:
+                self.logger.error("创建模糊定格视频失败")
+                return False
+            
+            # 5. 合并模糊视频和音频
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', blur_video,
+                '-i', temp_audio,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                output_path
+            ]
+            
+            self.logger.info(f"合并音频命令:")
+            self.logger.info(f"命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            # 6. 清理临时文件
+            if os.path.exists(blur_video):
+                os.remove(blur_video)
+                self.logger.info(f"清理临时文件: {blur_video}")
+            if os.path.exists(temp_audio):
+                os.remove(temp_audio)
+                self.logger.info(f"清理临时文件: {temp_audio}")
+            
+            if result.returncode != 0:
+                self.logger.error(f"合并音频失败:")
+                self.logger.error(f"错误输出: {result.stderr}")
+                return False
+            
+            self.logger.info(f"成功生成英文+中文版本视频: {os.path.basename(output_path)}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"创建英文+中文版本视频失败: {str(e)}", exc_info=True)
+            # 确保清理所有临时文件
+            for temp_file in [
+                output_path + ".temp.aac",
+                output_path + ".temp.mp4"
             ]:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
@@ -634,35 +635,18 @@ class VideoClipper:
                 # 设置输出路径
                 clean_id = self._clean_filename(item_id)
                 
-                # 创建对应的输出子目录（移到外面）
+                # 创建对应的输出子目录
                 output_subdir = os.path.join(self.output_dir, "vocabulary", clean_id)
                 os.makedirs(output_subdir, exist_ok=True)
                 
-                # 处理每种音频类型
-                for audio_type, audio_path in audio_paths.items():
-                    # 检查是否需要生成该类型的视频
-                    if audio_type not in self.generate_types:
-                        continue
-                        
-                    output_path = os.path.join(output_subdir, f"{clean_id}_{audio_type}.mp4")
-                    
-                    # 剪辑视频
-                    print(f"\n🎬 处理词汇片段: {item_id} ({audio_type})")
-                    print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
-                    
-                    if self._clip_video(start_time, end_time, audio_path, output_path):
-                        result_clips.append(output_path)
-                        print(f"✅ 生成视频片段: {os.path.basename(output_path)}")
-                        
-                # 创建完整版视频（如果需要）
-                if VideoTypes.COMPLETE in self.generate_types:
-                    complete_output_path = os.path.join(output_subdir, f"{clean_id}_complete.mp4")
-                    print(f"\n🎬 处理完整版视频: {item_id}")
-                    print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
-                    
-                    if self._create_complete_version(start_time, end_time, audio_paths, complete_output_path):
-                        result_clips.append(complete_output_path)
-                        print(f"✅ 生成完整版视频: {os.path.basename(complete_output_path)}")
+                # 创建英文+中文版本视频
+                enzh_output_path = os.path.join(output_subdir, f"{clean_id}_enzh.mp4")
+                print(f"\n🎬 处理英文+中文版本视频: {item_id}")
+                print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
+                
+                if self._create_enzh_version(start_time, end_time, audio_paths, enzh_output_path):
+                    result_clips.append(enzh_output_path)
+                    print(f"✅ 生成英文+中文版本视频: {os.path.basename(enzh_output_path)}")
         
         # 处理短语
         if 'phrases' in data:
@@ -683,35 +667,18 @@ class VideoClipper:
                 # 设置输出路径
                 clean_id = self._clean_filename(item_id)
                 
-                # 创建对应的输出子目录（移到外面）
+                # 创建对应的输出子目录
                 output_subdir = os.path.join(self.output_dir, "phrases", clean_id)
                 os.makedirs(output_subdir, exist_ok=True)
                 
-                # 处理每种音频类型
-                for audio_type, audio_path in audio_paths.items():
-                    # 检查是否需要生成该类型的视频
-                    if audio_type not in self.generate_types:
-                        continue
-                        
-                    output_path = os.path.join(output_subdir, f"{clean_id}_{audio_type}.mp4")
-                    
-                    # 剪辑视频
-                    print(f"\n🎬 处理短语片段: {item_id} ({audio_type})")
-                    print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
-                    
-                    if self._clip_video(start_time, end_time, audio_path, output_path):
-                        result_clips.append(output_path)
-                        print(f"✅ 生成视频片段: {os.path.basename(output_path)}")
-                        
-                # 创建完整版视频（如果需要）
-                if VideoTypes.COMPLETE in self.generate_types:
-                    complete_output_path = os.path.join(output_subdir, f"{clean_id}_complete.mp4")
-                    print(f"\n🎬 处理完整版视频: {item_id}")
-                    print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
-                    
-                    if self._create_complete_version(start_time, end_time, audio_paths, complete_output_path):
-                        result_clips.append(complete_output_path)
-                        print(f"✅ 生成完整版视频: {os.path.basename(complete_output_path)}")
+                # 创建英文+中文版本视频
+                enzh_output_path = os.path.join(output_subdir, f"{clean_id}_enzh.mp4")
+                print(f"\n🎬 处理英文+中文版本视频: {item_id}")
+                print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
+                
+                if self._create_enzh_version(start_time, end_time, audio_paths, enzh_output_path):
+                    result_clips.append(enzh_output_path)
+                    print(f"✅ 生成英文+中文版本视频: {os.path.basename(enzh_output_path)}")
         
         # 处理表达
         if 'expressions' in data:
@@ -732,34 +699,17 @@ class VideoClipper:
                 # 设置输出路径
                 clean_id = self._clean_filename(item_id)
                 
-                # 创建对应的输出子目录（移到外面）
+                # 创建对应的输出子目录
                 output_subdir = os.path.join(self.output_dir, "expressions", clean_id)
                 os.makedirs(output_subdir, exist_ok=True)
                 
-                # 处理每种音频类型
-                for audio_type, audio_path in audio_paths.items():
-                    # 检查是否需要生成该类型的视频
-                    if audio_type not in self.generate_types:
-                        continue
-                        
-                    output_path = os.path.join(output_subdir, f"{clean_id}_{audio_type}.mp4")
-                    
-                    # 剪辑视频
-                    print(f"\n🎬 处理表达片段: {item_id} ({audio_type})")
-                    print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
-                    
-                    if self._clip_video(start_time, end_time, audio_path, output_path):
-                        result_clips.append(output_path)
-                        print(f"✅ 生成视频片段: {os.path.basename(output_path)}")
-                        
-                # 创建完整版视频（如果需要）
-                if VideoTypes.COMPLETE in self.generate_types:
-                    complete_output_path = os.path.join(output_subdir, f"{clean_id}_complete.mp4")
-                    print(f"\n🎬 处理完整版视频: {item_id}")
-                    print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
-                    
-                    if self._create_complete_version(start_time, end_time, audio_paths, complete_output_path):
-                        result_clips.append(complete_output_path)
-                        print(f"✅ 生成完整版视频: {os.path.basename(complete_output_path)}")
+                # 创建英文+中文版本视频
+                enzh_output_path = os.path.join(output_subdir, f"{clean_id}_enzh.mp4")
+                print(f"\n🎬 处理英文+中文版本视频: {item_id}")
+                print(f"⏱️ 时间范围: {start_time:.2f}s - {end_time:.2f}s")
+                
+                if self._create_enzh_version(start_time, end_time, audio_paths, enzh_output_path):
+                    result_clips.append(enzh_output_path)
+                    print(f"✅ 生成英文+中文版本视频: {os.path.basename(enzh_output_path)}")
         
         return result_clips 
